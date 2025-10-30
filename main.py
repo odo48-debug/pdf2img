@@ -1,35 +1,44 @@
 from fastapi import FastAPI, UploadFile, File
-from fastapi.responses import FileResponse
+from typing import List
 import fitz  # PyMuPDF
+import base64
 import tempfile
 import uuid
 import os
 
-app = FastAPI()
+app = FastAPI(title="PDF → Imagen API")
 
 @app.post("/convert/")
-async def convert_pdf_to_images(file: UploadFile = File(...)):
-    """Convierte un PDF a imágenes y devuelve las rutas."""
-    suffix = file.filename.split(".")[-1]
-    if suffix.lower() != "pdf":
-        return {"error": "Solo se aceptan PDFs"}
+async def convert_multiple_pdfs(files: List[UploadFile] = File(...)):
+    """
+    Convierte múltiples PDFs a imágenes (una por página) y devuelve base64.
+    """
+    all_images = []
 
-    temp_pdf = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
-    temp_pdf.write(await file.read())
-    temp_pdf.close()
+    for file in files:
+        if not file.filename.lower().endswith(".pdf"):
+            continue
 
-    pdf_doc = fitz.open(temp_pdf.name)
-    output_files = []
+        # Guardar temporalmente el archivo PDF
+        temp_pdf = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
+        temp_pdf.write(await file.read())
+        temp_pdf.close()
 
-    for page_number in range(len(pdf_doc)):
-        page = pdf_doc.load_page(page_number)
-        pix = page.get_pixmap(dpi=150)  # resolución moderada
-        image_filename = f"/tmp/{uuid.uuid4()}.jpg"
-        pix.save(image_filename)
-        output_files.append(image_filename)
+        pdf_doc = fitz.open(temp_pdf.name)
 
-    pdf_doc.close()
-    os.remove(temp_pdf.name)
+        for page_number in range(len(pdf_doc)):
+            page = pdf_doc.load_page(page_number)
+            pix = page.get_pixmap(dpi=150)  # resolución estándar
+            image_bytes = pix.tobytes("jpg")
+            image_b64 = base64.b64encode(image_bytes).decode("utf-8")
 
-    # Devolver solo la primera imagen o todas
-    return {"images": output_files}
+            all_images.append({
+                "source_pdf": file.filename,
+                "page": page_number + 1,
+                "image_base64": image_b64
+            })
+
+        pdf_doc.close()
+        os.remove(temp_pdf.name)
+
+    return {"images": all_images}
